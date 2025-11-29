@@ -11,12 +11,12 @@ from streamlit_folium import st_folium
 # ==========================
 
 def distancia_haversine(lat1, lon1, lat2, lon2):
-    """Distancia en km entre dos puntos usando Haversine."""
-    radio_tierra = 6371
+    R = 6371.0
     dlat = radians(lat2 - lat1)
     dlon = radians(lon2 - lon1)
-    a = sin(dlat/2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon/2)**2
-    return 2 * radio_tierra * atan2(sqrt(a), sqrt(1-a))
+    a = sin(dlat/2)**2 + cos(radians(lat1))*cos(radians(lat2))*sin(dlon/2)**2
+    c = 2 * atan2(sqrt(a), sqrt(1-a))
+    return R * c
 
 def construir_grafo_knn(df, k=3):
     """Construye un grafo k-NN simple a partir de lat/long."""
@@ -175,6 +175,119 @@ def dibujar_mapa_folium(G, camino=None, solo_ruta=False):
 
     return m
 
+def construir_grafo_con_restricciones(df, k_vecinos=3):
+    """
+    Construye un grafo k-NN pero:
+      - NO incluye nodos en distritos prohibidos fuertes.
+      - Añade penalización a las aristas que tocan distritos de restricción parcial.
+    """
+    G = nx.Graph()
+
+    # Normalizamos distrito y filtramos prohibidos fuertes
+    df_local = df.copy()
+    df_local["DIST_NORM"] = df_local["DISTRITO"].apply(norm_distrito)
+    df_local = df_local[~df_local["DIST_NORM"].isin(PROHIBIDOS_FUERTES)].reset_index(drop=True)
+
+    # Cargamos nodos
+    coords = {}
+    distritos = {}
+    nombres = {}
+
+    for _, fila in df_local.iterrows():
+        ruc   = str(fila["RUC"])
+        lat   = float(fila["LATITUD"])
+        lon   = float(fila["LONGITUD"])
+        dist  = fila["DIST_NORM"]
+        name  = fila["RAZON_SOCIAL"]
+
+        G.add_node(ruc, nombre=name, lat=lat, lon=lon, distrito=dist)
+        coords[ruc] = (lat, lon)
+        distritos[ruc] = dist
+        nombres[ruc] = name
+
+    nodos = list(coords.keys())
+
+    # k vecinos más cercanos con penalización
+    for i, u in enumerate(nodos):
+        lat_u, lon_u = coords[u]
+        distancias = []
+        for j, v in enumerate(nodos):
+            if u == v:
+                continue
+            lat_v, lon_v = coords[v]
+            d = distancia_haversine(lat_u, lon_u, lat_v, lon_v)
+
+            # penalización si toca distritos parcialmente restringidos
+            dist_u = distritos[u]
+            dist_v = distritos[v]
+            if (dist_u in RESTRICCION_PARCIAL) or (dist_v in RESTRICCION_PARCIAL):
+                d = d + PENALIZACION_PARCIAL_KM
+
+            distancias.append((v, d))
+
+        distancias.sort(key=lambda x: x[1])
+        for v, d in distancias[:k_vecinos]:
+            if not G.has_edge(u, v):
+                G.add_edge(u, v, weight=d)
+
+    return G, df_local
+def bellman_ford(nodes, edges, origen):
+    """
+    Bellman-Ford clásico:
+    nodes: lista de nodos
+    edges: lista de tuplas (u, v, w)
+    origen: nodo origen
+    Devuelve:
+      dist: diccionario de distancias mínimas desde origen
+      padre: predecesor de cada nodo en el mejor camino
+    """
+    INF = float("inf")
+    dist = {n: INF for n in nodes}
+    padre = {n: None for n in nodes}
+    dist[origen] = 0.0
+
+    # relajamos |V|-1 veces
+    for _ in range(len(nodes) - 1):
+        hubo_cambio = False
+        for u, v, w in edges:
+            if dist[u] + w < dist[v]:
+                dist[v] = dist[u] + w
+                padre[v] = u
+                hubo_cambio = True
+        if not hubo_cambio:
+            break
+
+    # (opcional) detección de ciclo negativo; aquí no debería ocurrir
+    return dist, padre
+
+
+def camino_bellman_ford(G, origen, destino):
+    """
+    Prepara lista de aristas (u,v,w) desde un grafo NetworkX no dirigido,
+    ejecuta Bellman-Ford y reconstruye el camino origen->destino.
+    """
+    nodes = list(G.nodes())
+    edges = []
+
+    for u, v, data in G.edges(data=True):
+        w = float(data.get("weight", 1.0))
+        edges.append((u, v, w))
+        edges.append((v, u, w))  # grafo no dirigido
+
+    dist, padre = bellman_ford(nodes, edges, origen)
+
+    if dist[destino] == float("inf"):
+        return None, None  # no hay camino
+
+    # reconstruimos el camino recorriendo los padres desde el destino
+    camino = []
+    actual = destino
+    while actual is not None:
+        camino.append(actual)
+        actual = padre[actual]
+    camino.reverse()
+
+    return camino, dist[destino]
 
 
 def calcular_ruta_dijkstra(G, origen, destino):
@@ -234,6 +347,42 @@ activar_drones = st.sidebar.checkbox("Escenario con drones", key="sb_drones")
 # ==========================
 # Lógica principal
 # ==========================
+def dibujar_mapa_ruta(G, camino):
+    """
+    Mapa folium con SOLO la ruta óptima:
+    - nodos en la ruta
+    - líneas entre ellos
+    """
+    if not camino:
+        return None
+
+    # centro del mapa: promedio de las coordenadas de la ruta
+    lats = [G.nodes[n]["lat"] for n in camino]
+    lons = [G.nodes[n]["lon"] for n in camino]
+    centro = [float(np.mean(lats)), float(np.mean(lons))]
+
+    m = folium.Map(location=centro, zoom_start=13, control_scale=True)
+
+    # polilínea de la ruta
+    puntos = [(G.nodes[n]["lat"], G.nodes[n]["lon"]) for n in camino]
+    folium.PolyLine(puntos, weight=4, color="red", opacity=0.8).add_to(m)
+
+    # nodos
+    for i, n in enumerate(camino):
+        nodo = G.nodes[n]
+        color = "green" if i == 0 else ("blue" if i == len(camino)-1 else "orange")
+        popup = f"<b>{nodo.get('nombre','')}</b><br>RUC: {n}<br>Distrito: {nodo.get('distrito','')}"
+        folium.CircleMarker(
+            location=[nodo["lat"], nodo["lon"]],
+            radius=6,
+            color="black",
+            weight=0.8,
+            fill=True,
+            fill_opacity=0.95,
+            fill_color=color
+        ).add_to(m).add_child(folium.Popup(popup, max_width=300))
+
+    return m
 
 # ==========================
 # Lógica principal
@@ -243,44 +392,55 @@ st.sidebar.markdown("### 📂 Base de datos fija")
 st.sidebar.markdown("Usando archivo: **DataBase.xlsx**")
 
 # Leer datos directamente del archivo local
-DATA_PATH = "DataBase.xlsx"   # nombre de tu archivo en la misma carpeta
-
-try:
-    df = pd.read_excel(DATA_PATH)
-except FileNotFoundError:
-    st.error(f"No se encontró el archivo {DATA_PATH}. Asegúrate de que esté en la misma carpeta que app.py.")
-    st.stop()
-
+DATA_PATH = "DataBase.xlsx"
 
 df = pd.read_excel(DATA_PATH)
 
-# Nos quedamos solo con las columnas necesarias
-df = df[["RUC", "RAZON_SOCIAL", "LATITUD", "LONGITUD"]].copy()
+# Intentamos detectar la columna de distrito
+def pick_col(df, *names):
+    up = {str(c).strip().upper(): c for c in df.columns}
+    for n in names:
+        nU = str(n).strip().upper()
+        if nU in up:
+            return up[nU]
+    return None
 
-# RUC siempre como texto
+c_ruc  = pick_col(df, "RUC")
+c_raz  = pick_col(df, "RAZON_SOCIAL", "RAZON SO", "RAZON_SO", "RAZON")
+c_lat  = pick_col(df, "LATITUD", "LAT")
+c_lon  = pick_col(df, "LONGITUD", "LON", "LONG")
+c_dist = pick_col(df, "DISTRITO", "NOM_SIST", "UBIGEO_DISTRITO")
+
+if any(x is None for x in [c_ruc, c_raz, c_lat, c_lon]):
+    st.error("Faltan columnas RUC, RAZON_SOCIAL, LATITUD o LONGITUD en la base.")
+    st.stop()
+
+df = df[[c_ruc, c_raz, c_lat, c_lon] + ([c_dist] if c_dist else [])].copy()
+df.columns = ["RUC", "RAZON_SOCIAL", "LATITUD", "LONGITUD"] + (["DISTRITO"] if c_dist else [])
+
+# Normalización básica
 df["RUC"] = df["RUC"].astype(str).str.strip()
 
-# --- LIMPIEZA ROBUSTA DE COORDENADAS ---
 for col in ["LATITUD", "LONGITUD"]:
-    # Pasamos a texto, quitamos espacios y cambiamos coma por punto
     df[col] = (
         df[col]
-        .astype(str)           # por si vienen números mezclados con texto
+        .astype(str)
         .str.strip()
         .str.replace(",", ".", regex=False)
     )
-    # Convertimos a número; lo que no se pueda se vuelve NaN
     df[col] = pd.to_numeric(df[col], errors="coerce")
 
-# Eliminamos filas sin coordenadas válidas
 df = df.dropna(subset=["LATITUD", "LONGITUD"])
-
-# Aseguramos tipo float y quitamos RUC duplicados
 df["LATITUD"]  = df["LATITUD"].astype(float)
 df["LONGITUD"] = df["LONGITUD"].astype(float)
 df = df.drop_duplicates(subset=["RUC"]).reset_index(drop=True)
 
-st.success(f"Datos cargados correctamente desde {DATA_PATH}. Registros válidos: {len(df)}")
+if "DISTRITO" in df.columns:
+    df["DISTRITO"] = df["DISTRITO"].astype(str).str.strip()
+else:
+    df["DISTRITO"] = "SIN_DISTRITO"
+
+st.success(f"Datos cargados desde {DATA_PATH}. Registros válidos: {len(df)}")
 
 
 
@@ -304,7 +464,33 @@ else:
     st.warning("MST puede demorar si hay muchos nodos; úsalo con <= 200 nodos.")
     G = construir_grafo_mst(df_vis)
 
+PROHIBIDOS_FUERTES = {
+    "CALLAO",
+    "SAN ISIDRO",
+    "LIMA",               # Cercado de Lima (lo tomamos como todo LIMA por simplicidad)
+    "SAN BORJA",
+    "MIRAFLORES",
+    "SANTIAGO DE SURCO",
+    "SURCO",
+}
 
+RESTRICCION_PARCIAL = {
+    "BARRANCO",
+    "LA MOLINA",
+    "VILLA EL SALVADOR",
+    "VES",
+    "VILLA MARIA DEL TRIUNFO",
+    "VMT",
+    "LURIN",
+    "PACHACAMAC",
+}
+
+PENALIZACION_PARCIAL_KM = 20.0    # “castigo” extra si pasa por distrito parcialmente restringido
+
+def norm_distrito(d):
+    if d is None:
+        return "SIN_DISTRITO"
+    return str(d).strip().upper()
 
 # ==========================
 # Tabs de interfaz
@@ -438,21 +624,74 @@ with tab_fallas:
                 st.write(f"Ejemplo de componente aislado (si existe): {list(comps[0])[:10]}")
                 # Aquí podrías añadir un mapa post-falla si quieres.
 
-# -------- Tab Drones --------
+tab_dataset, tab_grafo, tab_mapa, tab_rutas, tab_hubs, tab_fallas, tab_drones = st.tabs(
+    ["📄 Dataset", "🕸 Grafo", "🗺 Mapa", "🧭 Rutas", "⭐ Hubs", "⚠️ Fallas", "🚁 Drones"]
+)
+
+# ---------------------------------------------------------
+# 🔹 TAB DRONES – Ruteo con Bellman-Ford y zonas prohibidas
+# ---------------------------------------------------------
 with tab_drones:
-    st.subheader("Escenario de uso de drones")
-    if not activar_drones:
-        st.info("Activa 'Escenario con drones' en la barra lateral.")
+    st.subheader("Ruta óptima con restricciones para drones (Bellman-Ford)")
+
+    # construimos grafo especial con prohibiciones / penalizaciones
+    k_vecinos_dron = 3
+    G_dron, df_dron = construir_grafo_con_restricciones(df, k_vecinos=k_vecinos_dron)
+
+    if G_dron.number_of_nodes() == 0:
+        st.warning("No hay nodos disponibles después de aplicar las zonas prohibidas.")
     else:
-        st.write("Aquí puedes estimar energía, autonomía y comparar rutas con vs sin dron.")
-        # TODO: aquí enchufas tus fórmulas de Wh/km, autonomía, etc.
-        st.markdown("- Ejemplo: consumo base 15 Wh/km + 1.2 Wh/km·kg por carga.")
-        st.markdown("- Autonomía estimada: distancia máxima antes de recarga.")
+        # elegimos por distrito primero (búsqueda por ubicación)
+        df_dron["DIST_NORM"] = df_dron["DISTRITO"].apply(norm_distrito)
+        distritos_disponibles = sorted(df_dron["DIST_NORM"].unique())
 
-st.sidebar.header("⚙️ Configuración del aplicativo")
+        colA, colB = st.columns(2)
+        with colA:
+            dist_origen = st.selectbox("Distrito de origen", distritos_disponibles)
+            empresas_origen = df_dron[df_dron["DIST_NORM"] == dist_origen]["RAZON_SOCIAL"].tolist()
+            emp_origen_nombre = st.selectbox("Empresa origen", empresas_origen)
 
-tipo_grafo = st.sidebar.selectbox("Tipo de grafo", ["k-NN", "MST"])
-k_vecinos = st.sidebar.slider("k vecinos (solo k-NN)", 1, 6, 3)
+        with colB:
+            dist_destino = st.selectbox("Distrito de destino", distritos_disponibles, index=min(1, len(distritos_disponibles)-1))
+            empresas_destino = df_dron[df_dron["DIST_NORM"] == dist_destino]["RAZON_SOCIAL"].tolist()
+            emp_destino_nombre = st.selectbox("Empresa destino", empresas_destino)
+
+        # obtenemos RUC de cada empresa
+        origen_row  = df_dron[(df_dron["RAZON_SOCIAL"] == emp_origen_nombre)].iloc[0]
+        destino_row = df_dron[(df_dron["RAZON_SOCIAL"] == emp_destino_nombre)].iloc[0]
+        origen_ruc  = str(origen_row["RUC"])
+        destino_ruc = str(destino_row["RUC"])
+
+        if st.button("Calcular ruta (Bellman-Ford con zonas restringidas)"):
+            camino, dist_km = camino_bellman_ford(G_dron, origen_ruc, destino_ruc)
+
+            if not camino:
+                st.error("No se encontró una ruta válida que respete las zonas prohibidas.")
+            else:
+                st.success(f"Ruta encontrada ({len(camino)} nodos). Distancia aproximada: {dist_km:.2f} km")
+
+                # información de origen / destino
+                st.markdown("### Origen")
+                st.write(f"**Empresa:** {origen_row['RAZON_SOCIAL']}")
+                st.write(f"**RUC:** {origen_row['RUC']}")
+                st.write(f"**Distrito:** {origen_row['DISTRITO']}")
+                st.write(f"**Coordenadas:** ({origen_row['LATITUD']}, {origen_row['LONGITUD']})")
+
+                st.markdown("### Destino")
+                st.write(f"**Empresa:** {destino_row['RAZON_SOCIAL']}")
+                st.write(f"**RUC:** {destino_row['RUC']}")
+                st.write(f"**Distrito:** {destino_row['DISTRITO']}")
+                st.write(f"**Coordenadas:** ({destino_row['LATITUD']}, {destino_row['LONGITUD']})")
+
+                st.markdown("### Ruta (secuencia de nodos)")
+                st.write(" → ".join(camino))
+
+                # mapa solo con la ruta
+                mapa_ruta = dibujar_mapa_ruta(G_dron, camino)
+                if mapa_ruta:
+                    st_folium(mapa_ruta, width=900, height=600)
+
+
 
 
 
