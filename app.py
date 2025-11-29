@@ -266,22 +266,26 @@ def dibujar_mapa_folium(G, camino=None, solo_ruta=False):
 
 
 
-def dibujar_mapa_ruta_dron(G, camino, origen_ruc, destino_ruc):
+def dibujar_mapa_ruta_dron(G, camino, origen_ruc=None, destino_ruc=None):
     """
     Mapa para la pestaña de drones:
     - Dibuja SOLO la ruta (camino) y resalta:
         * origen (verde)
         * destino (azul)
         * nodos intermedios (naranja)
-    - Muestra también TODOS los nodos prohibidos fuertes en rojo
+    - Muestra también TODOS los nodos en distritos prohibidos fuertes en rojo
       (aunque no estén en la ruta).
+    origen_ruc / destino_ruc son opcionales, por si se llama solo con (G, camino).
     """
     if not camino:
         return None
 
-    # Centro del mapa usando solo la ruta
+    # Centro del mapa usando solo la ruta (nodos que existan en G)
     lats = [G.nodes[n]["lat"] for n in camino if n in G.nodes]
     lons = [G.nodes[n]["lon"] for n in camino if n in G.nodes]
+    if not lats or not lons:
+        return None
+
     centro = [float(np.mean(lats)), float(np.mean(lons))]
     m = folium.Map(location=centro, zoom_start=13, control_scale=True)
 
@@ -298,7 +302,7 @@ def dibujar_mapa_ruta_dron(G, camino, origen_ruc, destino_ruc):
         if data.get("distrito", "").upper() in PROHIBIDOS_FUERTES
     ]
 
-    # Dibujamos nodos de la ruta + prohibidos
+    # Nodos a mostrar = ruta + prohibidos
     nodos_a_mostrar = set(camino) | set(nodos_prohibidos)
 
     for n in nodos_a_mostrar:
@@ -309,14 +313,15 @@ def dibujar_mapa_ruta_dron(G, camino, origen_ruc, destino_ruc):
         dist = data.get("distrito", "")
         nombre = data.get("nombre", "")
 
+        # Color según tipo de nodo
         if n in nodos_prohibidos:
-            fill = "red"            # zona prohibida
-        elif n == origen_ruc:
-            fill = "green"          # origen
-        elif n == destino_ruc:
-            fill = "blue"           # destino
+            fill = "red"              # zona prohibida fuerte
+        elif origen_ruc is not None and n == origen_ruc:
+            fill = "green"            # origen
+        elif destino_ruc is not None and n == destino_ruc:
+            fill = "blue"             # destino
         elif n in camino:
-            fill = "orange"         # ruta
+            fill = "orange"           # parte de la ruta
         else:
             fill = "#8FEAF3"
 
@@ -332,6 +337,7 @@ def dibujar_mapa_ruta_dron(G, camino, origen_ruc, destino_ruc):
         ).add_to(m).add_child(folium.Popup(popup, max_width=300))
 
     return m
+
 
 
 
@@ -845,6 +851,7 @@ with tab_drones:
             mapa_ruta = dibujar_mapa_ruta_dron(G_dron, camino, origen_ruc, destino_ruc)
             if mapa_ruta:
                 st_folium(mapa_ruta, width=900, height=600)
+
 
 
 
