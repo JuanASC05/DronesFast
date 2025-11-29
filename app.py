@@ -266,44 +266,41 @@ def dibujar_mapa_folium(G, camino=None, solo_ruta=False):
 
 
 # mapa con restricciones
-def dibujar_mapa_ruta_dron(G, camino, origen_ruc=None, destino_ruc=None):
+def dibujar_mapa_ruta_dron(G_base, camino, origen_ruc, destino_ruc):
     """
-    Mapa para la pestaña de drones:
-    - Dibuja SOLO la ruta (camino) y resalta:
-        * origen (verde)
-        * destino (azul)
-        * nodos intermedios (naranja)
-    - Muestra también TODOS los nodos en distritos prohibidos fuertes en rojo
-      (aunque no estén en la ruta).
-    origen_ruc / destino_ruc son opcionales, por si se llama solo con (G, camino).
+    Mapa Folium que muestra:
+      - Solo los nodos de la ruta + nodos prohibidos fuertes.
+      - Ruta en azul.
+      - Nodos prohibidos fuertes en naranja.
+      - Origen en verde, destino en azul, nodos intermedios en naranja.
     """
     if not camino:
         return None
 
-    # Centro del mapa usando solo la ruta (nodos que existan en G)
-    lats = [G.nodes[n]["lat"] for n in camino if n in G.nodes]
-    lons = [G.nodes[n]["lon"] for n in camino if n in G.nodes]
+    # Centro del mapa usando solo la ruta
+    lats = [G_base.nodes[n]["lat"] for n in camino if n in G_base.nodes]
+    lons = [G_base.nodes[n]["lon"] for n in camino if n in G_base.nodes]
     if not lats or not lons:
         return None
 
     centro = [float(np.mean(lats)), float(np.mean(lons))]
     m = folium.Map(location=centro, zoom_start=13, control_scale=True)
 
-    # Ruta en azul
+    # --- Línea de la ruta (azul) ---
     puntos = []
     for n in camino:
-        if n in G.nodes:
-            puntos.append((G.nodes[n]["lat"], G.nodes[n]["lon"]))
-    folium.PolyLine(puntos, weight=4, color="blue", opacity=0.8).add_to(m)
+        if n in G_base.nodes:
+            puntos.append((G_base.nodes[n]["lat"], G_base.nodes[n]["lon"]))
+    folium.PolyLine(puntos, weight=4, color="blue", opacity=0.85).add_to(m)
 
-    # Nodos prohibidos fuertes (rojo)
+    # --- Nodos prohibidos fuertes (según distrito) ---
     nodos_prohibidos = [
-        n for n, data in G.nodes(data=True)
+        n for n, data in G_base.nodes(data=True)
         if data.get("distrito", "").upper() in PROHIBIDOS_FUERTES
     ]
 
-    # Nodos a mostrar = ruta + prohibidos
-    nodos_a_mostrar = set(camino) | set(nodos_prohibidos)
+    # --- Nodos a mostrar: ruta + prohibidos ---
+    nodos_mostrar = set(camino) | set(nodos_prohibidos)
 
     for n in nodos_mostrar:
         if n not in G_base.nodes:
@@ -313,19 +310,17 @@ def dibujar_mapa_ruta_dron(G, camino, origen_ruc=None, destino_ruc=None):
         dist = data.get("distrito", "")
         nombre = data.get("nombre", "")
 
-        # --- Colores según tipo de nodo ---
+        # Colores según tipo de nodo
         if n in nodos_prohibidos:
-            fill = "#FF7F00"      # 🔥 naranja intenso para zonas prohibidas fuertes
+            fill = "#FF7F00"       # naranja fuerte para zonas prohibidas
         elif n == origen_ruc:
-            fill = "green"        # origen
+            fill = "green"         # origen
         elif n == destino_ruc:
-            fill = "blue"         # destino
+            fill = "blue"          # destino
         elif n in camino:
-            fill = "orange"       # parte de la ruta
+            fill = "orange"        # parte de la ruta
         else:
-            fill = "#8FEAF3"      # nodo normal
-
-
+            fill = "#8FEAF3"       # nodo normal
 
         popup = f"<b>{nombre}</b><br>RUC: {n}<br>Distrito: {dist}"
         folium.CircleMarker(
@@ -335,10 +330,11 @@ def dibujar_mapa_ruta_dron(G, camino, origen_ruc=None, destino_ruc=None):
             weight=0.8,
             fill=True,
             fill_opacity=0.95,
-            fill_color=fill
+            fill_color=fill,
         ).add_to(m).add_child(folium.Popup(popup, max_width=300))
 
     return m
+
 
 
 
@@ -795,6 +791,7 @@ with tab_drones:
             mapa_ruta = dibujar_mapa_ruta_dron(G_dron, camino, origen_ruc, destino_ruc)
             if mapa_ruta:
                 st_folium(mapa_ruta, width=900, height=600)
+
 
 
 
