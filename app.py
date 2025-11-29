@@ -305,25 +305,26 @@ def dibujar_mapa_ruta_dron(G, camino, origen_ruc=None, destino_ruc=None):
     # Nodos a mostrar = ruta + prohibidos
     nodos_a_mostrar = set(camino) | set(nodos_prohibidos)
 
-    for n in nodos_a_mostrar:
-        if n not in G.nodes:
+    for n in nodos_mostrar:
+        if n not in G_base.nodes:
             continue
-        data = G.nodes[n]
+        data = G_base.nodes[n]
         lat, lon = data["lat"], data["lon"]
         dist = data.get("distrito", "")
         nombre = data.get("nombre", "")
 
-        # Color según tipo de nodo
-       if n in nodos_prohibidos:
+        # --- Colores según tipo de nodo ---
+        if n in nodos_prohibidos:
             fill = "#FF7F00"      # 🔥 naranja intenso para zonas prohibidas fuertes
-       elif n == origen_ruc:
+        elif n == origen_ruc:
             fill = "green"        # origen
-       elif n == destino_ruc:
+        elif n == destino_ruc:
             fill = "blue"         # destino
-       elif n in camino:
-            fill = "orange"       # nodos de la ruta
-       else:
-            fill = "#8FEAF3"      # nodos normales
+        elif n in camino:
+            fill = "orange"       # parte de la ruta
+        else:
+            fill = "#8FEAF3"      # nodo normal
+
 
 
         popup = f"<b>{nombre}</b><br>RUC: {n}<br>Distrito: {dist}"
@@ -794,6 +795,7 @@ with tab_drones:
             mapa_ruta = dibujar_mapa_ruta_dron(G_dron, camino, origen_ruc, destino_ruc)
             if mapa_ruta:
                 st_folium(mapa_ruta, width=900, height=600)
+
 
 
 
