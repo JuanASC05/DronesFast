@@ -29,7 +29,7 @@ RESTRICCION_PARCIAL = {
     "PACHACAMAC",
 }
 
-PENALIZACION_PARCIAL_KM = 20.0
+
 
 def norm_distrito(d):
     if d is None:
@@ -407,65 +407,7 @@ def calcular_ruta_dijkstra(G, origen, destino):
         return camino, longitud
     except nx.NetworkXNoPath:
         return None, None
-def dibujar_mapa_ruta_dron(G_base, camino, nodos_prohibidos, origen_ruc, destino_ruc):
-    """
-    Mapa Folium que muestra:
-      - Solo los nodos de la ruta + nodos prohibidos.
-      - Nodos prohibidos en rojo.
-      - Origen en verde, destino en azul, nodos intermedios en naranja.
-      - Ruta en línea azul.
-    """
-    if not camino:
-        return None
 
-    # centro del mapa: promedio de las coord. de la ruta
-    lats = [G_base.nodes[n]["lat"] for n in camino if n in G_base.nodes]
-    lons = [G_base.nodes[n]["lon"] for n in camino if n in G_base.nodes]
-    centro = [float(np.mean(lats)), float(np.mean(lons))]
-
-    m = folium.Map(location=centro, zoom_start=13, control_scale=True)
-
-    # --- polilínea de la ruta (azul) ---
-    puntos = []
-    for n in camino:
-        if n in G_base.nodes:
-            puntos.append((G_base.nodes[n]["lat"], G_base.nodes[n]["lon"]))
-    folium.PolyLine(puntos, weight=4, color="blue", opacity=0.85).add_to(m)
-
-    # --- nodos a mostrar: ruta + prohibidos ---
-    nodos_mostrar = set(camino) | set(nodos_prohibidos)
-
-    for n in nodos_mostrar:
-        if n not in G_base.nodes:
-            continue
-        data = G_base.nodes[n]
-        lat, lon = data["lat"], data["lon"]
-        dist = data.get("distrito", "")
-        nombre = data.get("nombre", "")
-
-        if n in nodos_prohibidos:
-            fill = "red"      # nodo prohibido
-        elif n == origen_ruc:
-            fill = "green"    # origen
-        elif n == destino_ruc:
-            fill = "blue"     # destino
-        elif n in camino:
-            fill = "orange"   # ruta válida
-        else:
-            fill = "#8FEAF3"
-
-        popup = f"<b>{nombre}</b><br>RUC: {n}<br>Distrito: {dist}"
-        folium.CircleMarker(
-            location=[lat, lon],
-            radius=6,
-            color="black",
-            weight=0.8,
-            fill=True,
-            fill_opacity=0.95,
-            fill_color=fill
-        ).add_to(m).add_child(folium.Popup(popup, max_width=300))
-
-    return m
 
 # ==========================
 # Configuración de Streamlit
@@ -851,6 +793,8 @@ with tab_drones:
             mapa_ruta = dibujar_mapa_ruta_dron(G_dron, camino, origen_ruc, destino_ruc)
             if mapa_ruta:
                 st_folium(mapa_ruta, width=900, height=600)
+
+
 
 
 
