@@ -265,7 +265,7 @@ def dibujar_mapa_folium(G, camino=None, solo_ruta=False):
     return m
 
 
-
+# mapa con restricciones
 def dibujar_mapa_ruta_dron(G, camino, origen_ruc=None, destino_ruc=None):
     """
     Mapa para la pestaña de drones:
@@ -314,16 +314,17 @@ def dibujar_mapa_ruta_dron(G, camino, origen_ruc=None, destino_ruc=None):
         nombre = data.get("nombre", "")
 
         # Color según tipo de nodo
-        if n in nodos_prohibidos:
-            fill = "red"              # zona prohibida fuerte
-        elif origen_ruc is not None and n == origen_ruc:
-            fill = "green"            # origen
-        elif destino_ruc is not None and n == destino_ruc:
-            fill = "blue"             # destino
-        elif n in camino:
-            fill = "orange"           # parte de la ruta
-        else:
-            fill = "#8FEAF3"
+       if n in nodos_prohibidos:
+            fill = "#FF7F00"      # 🔥 naranja intenso para zonas prohibidas fuertes
+       elif n == origen_ruc:
+            fill = "green"        # origen
+       elif n == destino_ruc:
+            fill = "blue"         # destino
+       elif n in camino:
+            fill = "orange"       # nodos de la ruta
+       else:
+            fill = "#8FEAF3"      # nodos normales
+
 
         popup = f"<b>{nombre}</b><br>RUC: {n}<br>Distrito: {dist}"
         folium.CircleMarker(
@@ -793,6 +794,7 @@ with tab_drones:
             mapa_ruta = dibujar_mapa_ruta_dron(G_dron, camino, origen_ruc, destino_ruc)
             if mapa_ruta:
                 st_folium(mapa_ruta, width=900, height=600)
+
 
 
 
