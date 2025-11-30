@@ -892,14 +892,14 @@ with tab_grafo:
 with tab_mapa:
     st.subheader("Grafo georreferenciado con zonas reguladas")
 
-    # Mapa base con nodos (sin aristas para que no se sature)
     mapa = dibujar_mapa_folium(G, dibujar_aristas=False)
     if mapa:
-        # 🔹 NUEVO: superponer capas GEOJSON (gobierno / salud / zonas sensibles)
-        mapa = agregar_zonas_restringidas(mapa)
+        # Solo modificamos el mapa, NO lo reasignamos
+        agregar_zonas_restringidas(mapa)
         st_folium(mapa, width=900, height=600)
     else:
         st.warning("No se pudo construir el mapa.")
+
 
 # -------- Tab Rutas --------
 with tab_rutas:
@@ -1114,6 +1114,7 @@ with tab_drones:
             mapa_ruta = dibujar_mapa_ruta_dron(G_dron, camino, origen_ruc, destino_ruc)
             if mapa_ruta:
                 st_folium(mapa_ruta, width=900, height=600)
+
 
 
 
