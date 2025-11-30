@@ -467,61 +467,55 @@ def dibujar_mapa_folium(
 
 
 # mapa con restricciones
-def dibujar_mapa_ruta_dron(G_base, camino, origen_ruc, destino_ruc):
+def dibujar_mapa_ruta_dron(G, camino, origen_ruc=None, destino_ruc=None):
     """
-    Mapa Folium que muestra:
-      - Solo los nodos de la ruta + nodos prohibidos fuertes.
-      - Ruta en azul.
-      - Nodos prohibidos fuertes en naranja.
-      - Origen en verde, destino en azul, nodos intermedios en naranja.
+    Mapa para la pestaña de drones:
+    - Ruta en azul.
+    - Origen en verde, destino en azul.
+    - Nodos de la ruta en naranja.
+    - Zonas prohibidas fuertes en otro color (por ejemplo, naranja fuerte).
     """
     if not camino:
         return None
 
-    # Centro del mapa usando solo la ruta
-    lats = [G_base.nodes[n]["lat"] for n in camino if n in G_base.nodes]
-    lons = [G_base.nodes[n]["lon"] for n in camino if n in G_base.nodes]
+    lats = [G.nodes[n]["lat"] for n in camino if n in G.nodes]
+    lons = [G.nodes[n]["lon"] for n in camino if n in G.nodes]
     if not lats or not lons:
         return None
 
     centro = [float(np.mean(lats)), float(np.mean(lons))]
     m = folium.Map(location=centro, zoom_start=13, control_scale=True)
 
-    # --- Línea de la ruta (azul) ---
-    puntos = []
-    for n in camino:
-        if n in G_base.nodes:
-            puntos.append((G_base.nodes[n]["lat"], G_base.nodes[n]["lon"]))
-    folium.PolyLine(puntos, weight=4, color="blue", opacity=0.85).add_to(m)
+    # Polilínea de la ruta (azul)
+    puntos = [(G.nodes[n]["lat"], G.nodes[n]["lon"]) for n in camino if n in G.nodes]
+    folium.PolyLine(puntos, weight=4, color="blue", opacity=0.8).add_to(m)
 
-    # --- Nodos prohibidos fuertes (según distrito) ---
+    # Nodos prohibidos fuertes (p.ej. color naranja)
     nodos_prohibidos = [
-        n for n, data in G_base.nodes(data=True)
+        n for n, data in G.nodes(data=True)
         if data.get("distrito", "").upper() in PROHIBIDOS_FUERTES
     ]
 
-    # --- Nodos a mostrar: ruta + prohibidos ---
-    nodos_mostrar = set(camino) | set(nodos_prohibidos)
+    nodos_a_mostrar = set(camino) | set(nodos_prohibidos)
 
-    for n in nodos_mostrar:
-        if n not in G_base.nodes:
+    for n in nodos_a_mostrar:
+        if n not in G.nodes:
             continue
-        data = G_base.nodes[n]
+        data = G.nodes[n]
         lat, lon = data["lat"], data["lon"]
         dist = data.get("distrito", "")
         nombre = data.get("nombre", "")
 
-        # Colores según tipo de nodo
         if n in nodos_prohibidos:
-            fill = "#FF7F00"       # naranja fuerte para zonas prohibidas
-        elif n == origen_ruc:
-            fill = "green"         # origen
-        elif n == destino_ruc:
-            fill = "blue"          # destino
+            fill = "orange"   # zona prohibida fuerte
+        elif origen_ruc is not None and n == origen_ruc:
+            fill = "green"
+        elif destino_ruc is not None and n == destino_ruc:
+            fill = "blue"
         elif n in camino:
-            fill = "orange"        # parte de la ruta
+            fill = "#FFD700"  # ruta (amarillo/naranja claro)
         else:
-            fill = "#8FEAF3"       # nodo normal
+            fill = "#8FEAF3"
 
         popup = f"<b>{nombre}</b><br>RUC: {n}<br>Distrito: {dist}"
         folium.CircleMarker(
@@ -531,10 +525,11 @@ def dibujar_mapa_ruta_dron(G_base, camino, origen_ruc, destino_ruc):
             weight=0.8,
             fill=True,
             fill_opacity=0.95,
-            fill_color=fill,
+            fill_color=fill
         ).add_to(m).add_child(folium.Popup(popup, max_width=300))
 
     return m
+
 
 
 
@@ -1033,87 +1028,100 @@ with tab_fallas:
                 if mapa_falla:
                     mapa_falla = agregar_zonas_restringidas(mapa_falla)
                     st_folium(mapa_falla, width=900, height=600)
-
 # ---------------------------------------------------------
 # 🔹 TAB DRONES – Bellman-Ford + zonas restringidas
 # ---------------------------------------------------------
 with tab_drones:
     st.subheader("Ruta óptima con restricciones para drones (Bellman-Ford)")
 
-    # Aseguramos tener distrito normalizado en el df completo
-    df["DIST_NORM"] = df["DISTRITO"].apply(norm_distrito)
-    distritos_disponibles = sorted(df["DIST_NORM"].unique())
-
-    if len(distritos_disponibles) == 0:
-        st.warning("No hay distritos en la base de datos.")
+    # 0) Verificar que esté activado el escenario de drones
+    if not activar_drones:
+        st.info("Activa **'Escenario con drones'** en la barra lateral para usar este módulo.")
     else:
-        colA, colB = st.columns(2)
-        with colA:
-            dist_origen = st.selectbox("Distrito de origen", distritos_disponibles)
-            empresas_origen = df[df["DIST_NORM"] == dist_origen]["RAZON_SOCIAL"].tolist()
-            emp_origen_nombre = st.selectbox("Empresa origen", empresas_origen)
+        # 1) Aseguramos tener distrito normalizado en el df completo
+        df["DIST_NORM"] = df["DISTRITO"].apply(norm_distrito)
+        distritos_disponibles = sorted(df["DIST_NORM"].unique())
 
-        with colB:
-            dist_destino = st.selectbox(
-                "Distrito de destino",
-                distritos_disponibles,
-                index=min(1, len(distritos_disponibles) - 1),
-            )
-            empresas_destino = df[df["DIST_NORM"] == dist_destino]["RAZON_SOCIAL"].tolist()
-            emp_destino_nombre = st.selectbox("Empresa destino", empresas_destino)
+        if len(distritos_disponibles) == 0:
+            st.warning("No hay distritos en la base de datos.")
+        else:
+            colA, colB = st.columns(2)
+            with colA:
+                dist_origen = st.selectbox("Distrito de origen", distritos_disponibles)
+                empresas_origen = df[df["DIST_NORM"] == dist_origen]["RAZON_SOCIAL"].tolist()
+                emp_origen_nombre = st.selectbox("Empresa origen", empresas_origen)
 
-        # Filas de origen y destino
-        origen_row  = df[df["RAZON_SOCIAL"] == emp_origen_nombre].iloc[0]
-        destino_row = df[df["RAZON_SOCIAL"] == emp_destino_nombre].iloc[0]
-        origen_ruc  = str(origen_row["RUC"])
-        destino_ruc = str(destino_row["RUC"])
-
-        if st.button("Calcular ruta (Bellman-Ford con zonas restringidas)"):
-            # 1) Construimos el grafo especial para drones
-            G_dron = construir_grafo_dron(df, k_vecinos=4)
-
-            # 2) Intentamos Bellman-Ford en ese grafo
-            camino, dist_km = camino_bellman_ford(G_dron, origen_ruc, destino_ruc)
-            uso_fallback = False
-
-            # 3) Fallback: si el grafo estuviera desconectado
-            if not camino:
-                uso_fallback = True
-                lat_o, lon_o = float(origen_row["LATITUD"]), float(origen_row["LONGITUD"])
-                lat_d, lon_d = float(destino_row["LATITUD"]), float(destino_row["LONGITUD"])
-                dist_km = distancia_haversine(lat_o, lon_o, lat_d, lon_d)
-                camino = [origen_ruc, destino_ruc]
-
-            if uso_fallback:
-                st.info(
-                    "La red de nodos para drones no tenía un camino conectado entre estas empresas. "
-                    "Se muestra un vuelo directo aproximado origen → destino."
+            with colB:
+                dist_destino = st.selectbox(
+                    "Distrito de destino",
+                    distritos_disponibles,
+                    index=min(1, len(distritos_disponibles) - 1),
                 )
-            else:
-                st.success(
-                    f"Ruta encontrada considerando penalizaciones por zonas restringidas. "
-                    f"Distancia aproximada: {dist_km:.2f} km"
-                )
+                empresas_destino = df[df["DIST_NORM"] == dist_destino]["RAZON_SOCIAL"].tolist()
+                emp_destino_nombre = st.selectbox("Empresa destino", empresas_destino)
 
-            # Info de origen / destino
-            st.markdown("### 🟢 Origen")
-            st.write(f"**Empresa:** {origen_row['RAZON_SOCIAL']}")
-            st.write(f"**RUC:** {origen_row['RUC']}")
-            st.write(f"**Distrito:** {origen_row['DISTRITO']}")
-            st.write(f"**Coordenadas:** ({origen_row['LATITUD']}, {origen_row['LONGITUD']})")
+            # Filas de origen y destino
+            origen_row  = df[df["RAZON_SOCIAL"] == emp_origen_nombre].iloc[0]
+            destino_row = df[df["RAZON_SOCIAL"] == emp_destino_nombre].iloc[0]
+            origen_ruc  = str(origen_row["RUC"])
+            destino_ruc = str(destino_row["RUC"])
 
-            st.markdown("### 🔵 Destino")
-            st.write(f"**Empresa:** {destino_row['RAZON_SOCIAL']}")
-            st.write(f"**RUC:** {destino_row['RUC']}")
-            st.write(f"**Distrito:** {destino_row['DISTRITO']}")
-            st.write(f"**Coordenadas:** ({destino_row['LATITUD']}, {destino_row['LONGITUD']})")
+            # 2) Botón principal
+            if st.button("Calcular ruta (Bellman-Ford con zonas restringidas)", key="btn_drones"):
+                # 2.1) Construimos el grafo especial para drones
+                G_dron = construir_grafo_dron(df, k_vecinos=4)
 
-            st.markdown("### Ruta (secuencia de nodos)")
-            st.write(" → ".join(camino))
+                # Verificar que los nodos existan en el grafo
+                if origen_ruc not in G_dron.nodes or destino_ruc not in G_dron.nodes:
+                    st.error("Las empresas seleccionadas no se encuentran en la red de drones.")
+                else:
+                    # 2.2) Intentamos Bellman-Ford en ese grafo
+                    camino, dist_km = camino_bellman_ford(G_dron, origen_ruc, destino_ruc)
+                    uso_fallback = False
 
-            mapa_ruta = dibujar_mapa_ruta_dron(G_dron, camino, origen_ruc, destino_ruc)
-            if mapa_ruta:
-                st_folium(mapa_ruta, width=900, height=600)
+                    # 2.3) Si el grafo está desconectado para ese par,
+                    #      usamos fallback de ruta directa (origen -> destino)
+                    if not camino:
+                        uso_fallback = True
+                        lat_o, lon_o = float(origen_row["LATITUD"]), float(origen_row["LONGITUD"])
+                        lat_d, lon_d = float(destino_row["LATITUD"]), float(destino_row["LONGITUD"])
+                        dist_km = distancia_haversine(lat_o, lon_o, lat_d, lon_d)
+                        camino = [origen_ruc, destino_ruc]
+
+                    # --- Mensajes al usuario ---
+                    if uso_fallback:
+                        st.info(
+                            "La red de nodos para drones no tenía un camino conectado entre estas empresas. "
+                            "Se muestra un vuelo directo aproximado origen → destino."
+                        )
+                    else:
+                        st.success(
+                            f"Ruta encontrada considerando penalizaciones por zonas restringidas. "
+                            f"Distancia aproximada: {dist_km:.2f} km"
+                        )
+
+                    # 3) Info de origen / destino
+                    st.markdown("### 🟢 Origen")
+                    st.write(f"**Empresa:** {origen_row['RAZON_SOCIAL']}")
+                    st.write(f"**RUC:** {origen_row['RUC']}")
+                    st.write(f"**Distrito:** {origen_row['DISTRITO']}")
+                    st.write(f"**Coordenadas:** ({origen_row['LATITUD']}, {origen_row['LONGITUD']})")
+
+                    st.markdown("### 🔵 Destino")
+                    st.write(f"**Empresa:** {destino_row['RAZON_SOCIAL']}")
+                    st.write(f"**RUC:** {destino_row['RUC']}")
+                    st.write(f"**Distrito:** {destino_row['DISTRITO']}")
+                    st.write(f"**Coordenadas:** ({destino_row['LATITUD']}, {destino_row['LONGITUD']})")
+
+                    st.markdown("### Ruta (secuencia de nodos)")
+                    st.write(" → ".join(camino))
+
+                    # 4) Mapa: ruta + zonas prohibidas
+                    mapa_ruta = dibujar_mapa_ruta_dron(G_dron, camino, origen_ruc, destino_ruc)
+                    if mapa_ruta:
+                        st_folium(mapa_ruta, width=900, height=600)
+
+
 
 
 
